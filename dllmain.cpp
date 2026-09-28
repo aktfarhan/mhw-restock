@@ -2,15 +2,31 @@
 #include <iostream>
 #include <fstream>
 
+// Runs on its own thread as long as the game is open.
 DWORD WINAPI RestockThread(_In_ LPVOID LpParameter) {
-    std::ofstream outFile("HelloWorld.txt");
+    // Append: add lines, don't overwrite
+    std::ofstream outFile("HelloWorld.txt", std::ios::app);
 
     if (!outFile.is_open()) {
         std::cerr << "Error opening file." << std::endl;
         return 1;
     }
 
-    outFile << "hello" << std::endl;
+    // Remembers the key state from the previous loop
+    bool wasDown = false;
+
+    while (true) {
+        bool downNow = (GetAsyncKeyState('P') & 0x8000) != 0;
+        
+        // Only run when the key is pressed
+        if (downNow && !wasDown) {
+            outFile << "pressed" << std::endl;
+        }
+
+        wasDown = downNow;
+        Sleep(10);
+
+    }
 
     return 0;
 }
@@ -18,7 +34,7 @@ DWORD WINAPI RestockThread(_In_ LPVOID LpParameter) {
 BOOL WINAPI DllMain(
     HINSTANCE hinstDLL,  // handle to DLL module
     DWORD fdwReason,     // reason for calling function
-    LPVOID lpvReserved )  // reserved
+    LPVOID lpvReserved ) // reserved
 {
     // Perform actions based on the reason for calling.
     if (fdwReason == DLL_PROCESS_ATTACH) {
