@@ -1,6 +1,17 @@
 #include <windows.h>
+#include <iostream>
+#include <fstream>
 
 DWORD WINAPI RestockThread(_In_ LPVOID LpParameter) {
+    std::ofstream outFile("HelloWorld.txt");
+
+    if (!outFile.is_open()) {
+        std::cerr << "Error opening file." << std::endl;
+        return 1;
+    }
+
+    outFile << "hello" << std::endl;
+
     return 0;
 }
 
