@@ -11,14 +11,11 @@ When you press the key in a base, the mod applies one of your saved item loadout
 ## Install
 
 1. Download the latest zip from [Releases](https://github.com/aktfarhan/mhw-restock/releases).
-2. Extract it into your game folder. The DLL should end up at:
-    ```
-    Monster Hunter World\nativePC\plugins\mhw_restock.dll
-    ```
+2. Copy `mhw_restock.dll` into your game folder at `Monster Hunter World\nativePC\plugins\`.
 
 ## Use
 
-In a base, press F5. Your pouch will be restocked with item loadout 1.
+While in base, press F5. Your pouch will be restocked with item loadout 1.
 
 ## Settings
 
