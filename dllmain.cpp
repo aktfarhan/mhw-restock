@@ -1,6 +1,14 @@
 #include <windows.h>
 #include <iostream>
 #include <fstream>
+#include <cstdint>
+#include <cstring>
+#include <atomic>
+
+const int LOADOUT_SLOT = 6; // Which loadout to apply
+const uintptr_t JOB_RUNNER = 0x1AD9D20; // Runs every frame on the main thread
+const uintptr_t APPLY_LOADOUT = 0x1D38110; // Call ApplyLoadout(obj, loadoutPos, flag)
+const uintptr_t LOADOUT_OBJ_BASE = 0x051C4640; // Start of the ApplyLoadout object's pointer
 
 // Returns the zone ID (e.g. 306 = Seliana Gathering Hub)
 int ReadZoneId() {
@@ -27,6 +35,118 @@ int ReadZoneId() {
     return *(int*) (addr + 0xB88);
 }
 
+// Returns the object ApplyLoadout needs, or 0 if the chain isn't ready
+uintptr_t ReadLoadoutObj() {
+    uintptr_t base = (uintptr_t) GetModuleHandle(nullptr);
+    uintptr_t addr = *(uintptr_t*) (base + LOADOUT_OBJ_BASE);
+    const uintptr_t offsets[] = { 0x150, 0x10, 0x140, 0x170, 0x2C0, 0x438 };
+
+    // Follow each step of the path
+    for (uintptr_t offset : offsets) {
+        if (addr == 0) return 0;
+        
+        // Add the offset, read the next pointer
+        addr = *(uintptr_t*) (addr + offset);
+    }
+    return addr;
+}
+
+// Astera, Astera Gathering Hub, Research Base, Seliana, Seliana Gathering Hub
+bool IsBase(int zone) {
+    return zone == 301 || zone == 302 || zone == 303 || zone == 305 || zone == 306;
+}
+
+// Returns true if tabbed into the game
+bool IsGameFocused() {
+    DWORD pid = 0;
+    GetWindowThreadProcessId(GetForegroundWindow(), &pid);
+    return pid == GetCurrentProcessId();
+}
+
+// The shape of the two game functions
+using ApplyLoadoutFn = void (*)(void* obj, int loadoutPos, int flag);
+using JobRunnerFn = uintptr_t (*)(void* a, void* b, void* c, void* d);
+
+JobRunnerFn originalJobRunner = nullptr;
+std::atomic<bool> restockRequested{false};
+std::atomic<int> restockResult{0};
+std::atomic<int> restockZone{0};
+
+// The replacement for the game's job runner, called on every frame
+uintptr_t HookedJobRunner(void* a, void* b, void* c, void* d) {
+    // Let the game do its normal jobs first
+    uintptr_t result = originalJobRunner(a, b, c, d);
+
+    // Check if P was pressed
+    if (restockRequested.exchange(false)) {
+        int zone = ReadZoneId();
+        uintptr_t obj = ReadLoadoutObj();
+        restockZone = zone;
+
+        // Do the proper action
+        if (!IsBase(zone)) {
+            restockResult = -1;
+        } else if (obj == 0) {
+            restockResult = -2;
+        } else {
+            uintptr_t base = (uintptr_t) GetModuleHandle(nullptr);
+            ApplyLoadoutFn applyLoadout = (ApplyLoadoutFn) (base + APPLY_LOADOUT);
+            applyLoadout((void*) obj, LOADOUT_SLOT, 0);
+            restockResult = 1;
+        }
+    }
+    return result;
+}
+
+// Writes the 14-byte jump to 'dest' at 'at'
+void WriteAbsJump(uint8_t* at, uintptr_t dest) {
+    at[0] = 0xFF;
+    at[1] = 0x25;
+    *(uint32_t*) (at + 2) = 0;
+    
+    // The 8-byte address to jump to
+    *(uintptr_t*) (at + 6) = dest;
+}
+
+// Hooks the job runner
+bool InstallHook() {
+    uint8_t* target = (uint8_t*) ((uintptr_t) GetModuleHandle(nullptr) + JOB_RUNNER);
+    
+    // The 16-byte swap needs a 16-byte aligned address
+    if ((uintptr_t) target % 16 != 0) return false;
+
+    // The 14 bytes that are replaced
+    const uint8_t expected[14] = { 0x40, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x89, 0x6C, 0x24, 0x50, 0x48, 0x8B, 0xD9 };
+    if (memcmp(target, expected, sizeof(expected)) != 0) return false;
+
+    // Save a copy of the game's first 14 bytes
+    uint8_t* tramp = (uint8_t*) VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!tramp) return false;
+    memcpy(tramp, target, 14);
+    WriteAbsJump(tramp + 14, (uintptr_t) (target + 14));
+    originalJobRunner = (JobRunnerFn) tramp;
+
+    // Build the new first 16 bytes
+    alignas(16) uint8_t patch[16];
+    WriteAbsJump(patch, (uintptr_t) &HookedJobRunner);
+    patch[14] = target[14];
+    patch[15] = target[15];
+
+    // Change game code from read-only to write mode
+    DWORD oldProtect;
+    if (!VirtualProtect(target, 16, PAGE_EXECUTE_READWRITE, &oldProtect)) return false;
+
+    // Swap in the new bytes all at once
+    unsigned __int128 oldBytes, newBytes;
+    memcpy(&oldBytes, target, 16);
+    memcpy(&newBytes, patch, 16);
+    bool swapped = __sync_bool_compare_and_swap((unsigned __int128*) target, oldBytes, newBytes);
+
+    // Make it read-only again, and tell the CPU the code changed
+    VirtualProtect(target, 16, oldProtect, &oldProtect);
+    FlushInstructionCache(GetCurrentProcess(), target, 16);
+    return swapped;
+}
 
 // Runs on its own thread as long as the game is open.
 DWORD WINAPI RestockThread(_In_ LPVOID LpParameter) {
@@ -38,6 +158,17 @@ DWORD WINAPI RestockThread(_In_ LPVOID LpParameter) {
         return 1;
     }
 
+    // Install the hook, and try for 60s if it fails
+    bool hooked = false;
+    for (int i = 0; i < 60 && !hooked; i++) {
+        hooked = InstallHook();
+        if (!hooked) Sleep(1000);
+    }
+
+    // Log if it worked, and stop if it didn't
+    outFile << (hooked ? "hook installed" : "hook FAILED, restock disabled") << std::endl;
+    if (!hooked) return 1;
+
     // Remembers the key state from the previous loop
     bool wasDown = false;
 
@@ -45,13 +176,20 @@ DWORD WINAPI RestockThread(_In_ LPVOID LpParameter) {
         bool downNow = (GetAsyncKeyState('P') & 0x8000) != 0;
         
         // Only run when the key is pressed
-        if (downNow && !wasDown) {
-            outFile << "zone = " << ReadZoneId() << std::endl;
+        if (downNow && !wasDown && IsGameFocused()) {
+            restockRequested = true;
+            outFile << "P pressed" << std::endl;
         }
 
         wasDown = downNow;
-        Sleep(10);
 
+        // Log what the hook did
+        int result = restockResult.exchange(0);
+        if (result == 1) outFile << "restocked (zone " << restockZone << ")" << std::endl;
+        if (result == -1) outFile << "skipped: not in a base (zone " << restockZone << ")" << std::endl;
+        if (result == -2) outFile << "skipped: loadout object not ready" << std::endl;
+
+        Sleep(10);
     }
 
     return 0;
