@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cctype>
 #include <string>
+#include <cstdio>
 
 const uintptr_t JOB_RUNNER = 0x1AD9D20; // Runs every frame on the main thread
 const uintptr_t APPLY_LOADOUT = 0x1D38110; // Call ApplyLoadout(obj, loadoutPos, flag)
@@ -177,6 +178,15 @@ int KeyFromName(const char* name) {
     return 0;
 }
 
+// Returns the current date and time
+std::string Timestamp() {
+    SYSTEMTIME t;
+    GetLocalTime(&t);
+    char text[32];
+    snprintf(text, sizeof(text), "[%04d-%02d-%02d %02d:%02d:%02d] ", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
+    return text;
+}
+
 // Returns when the ini file was last saved, or 0 if it doesn't exist
 ULONGLONG IniLastWrite() {
     WIN32_FILE_ATTRIBUTE_DATA info;
@@ -191,7 +201,7 @@ void LoadSettings(std::ofstream& log) {
         std::string loadoutText = std::to_string(loadoutSlot + 1);
         WritePrivateProfileStringA("Settings", "Key", keyName, iniPath);
         WritePrivateProfileStringA("Settings", "Loadout", loadoutText.c_str(), iniPath);
-        log << "created" << iniPath << std::endl;
+        log << Timestamp() << "created " << iniPath << std::endl;
     }
 
     // Read both values
@@ -202,42 +212,48 @@ void LoadSettings(std::ofstream& log) {
     // Only accept valid keys
     int newKey = KeyFromName(newKeyName);
     if (newKey == 0) {
-        log << "settings: unknown key '" << newKeyName << "', keeping " << keyName << std::endl;
+        log << Timestamp() << "settings: unknown key '" << newKeyName << "', keeping " << keyName << std::endl;
     } else if (newKey != restockKey) {
         restockKey = newKey;
         strcpy(keyName, newKeyName);
-        log << "settings: Key = " << keyName << std::endl;
+        log << Timestamp() << "settings: Key = " << keyName << std::endl;
     }
 
     // Loadout: the game has 80 slots
     if (newLoadout < 1 || newLoadout > 80) {
-        log << "settings: Loadout must be 1-80, keeping " << loadoutSlot + 1 << std::endl;
+        log << Timestamp() << "settings: Loadout must be 1-80, keeping " << loadoutSlot + 1 << std::endl;
     } else if (newLoadout - 1 != loadoutSlot) {
         loadoutSlot = newLoadout - 1;
-        log << "settings: Loadout = " << newLoadout << std::endl;
+        log << Timestamp() << "settings: Loadout = " << newLoadout << std::endl;
     }
 }
 
 
 // Runs on its own thread as long as the game is open.
 DWORD WINAPI RestockThread(_In_ LPVOID LpParameter) {
+    // Get the dll file path
+    char logPath[MAX_PATH];
+    GetModuleFileNameA((HMODULE) LpParameter, logPath, MAX_PATH);
+
+    // Make the log and ini paths from it
+    strcpy(iniPath, logPath);
+    char* logDot = strrchr(logPath, '.');
+    char* iniDot = strrchr(iniPath, '.');
+    if (logDot) strcpy(logDot, ".log");
+    if (iniDot) strcpy(iniDot, ".ini");
+
     // Append: add lines, don't overwrite
-    std::ofstream outFile("HelloWorld.txt", std::ios::app);
+    std::ofstream outFile(logPath, std::ios::app);
 
     if (!outFile.is_open()) {
         std::cerr << "Error opening file." << std::endl;
         return 1;
     }
 
-    // Get the ini file
-    GetModuleFileNameA((HMODULE) LpParameter, iniPath, MAX_PATH);
-    char* dot = strrchr(iniPath, '.');
-    if (dot) strcpy(dot, ".ini");
-
     // Load the settings once at startup
     LoadSettings(outFile);
     ULONGLONG lastWrite = IniLastWrite();
-    outFile << "settings: Key = " << keyName << ", Loadout = " << loadoutSlot + 1 << std::endl;
+    outFile << Timestamp() << "settings: Key = " << keyName << ", Loadout = " << loadoutSlot + 1 << std::endl;
 
     // Install the hook, and try for 60s if it fails
     bool hooked = false;
@@ -247,7 +263,7 @@ DWORD WINAPI RestockThread(_In_ LPVOID LpParameter) {
     }
 
     // Log if it worked, and stop if it didn't
-    outFile << (hooked ? "hook installed" : "hook FAILED, restock disabled") << std::endl;
+    outFile << Timestamp() << (hooked ? "hook installed" : "hook FAILED, restock disabled") << std::endl;
     if (!hooked) return 1;
 
     // Remembers the key state from the previous loop
@@ -262,16 +278,16 @@ DWORD WINAPI RestockThread(_In_ LPVOID LpParameter) {
         // Only run when the key is pressed
         if (downNow && !wasDown && IsGameFocused()) {
             restockRequested = true;
-            outFile << keyName << " pressed" << std::endl;
+            outFile << Timestamp() << keyName << " pressed" << std::endl;
         }
 
         wasDown = downNow;
 
         // Log what the hook did
         int result = restockResult.exchange(0);
-        if (result == 1) outFile << "restocked (zone " << restockZone << ")" << std::endl;
-        if (result == -1) outFile << "skipped: not in a base (zone " << restockZone << ")" << std::endl;
-        if (result == -2) outFile << "skipped: loadout object not ready" << std::endl;
+        if (result == 1) outFile << Timestamp() << "restocked (zone " << restockZone << ")" << std::endl;
+        if (result == -1) outFile << Timestamp() << "skipped: not in a base (zone " << restockZone << ")" << std::endl;
+        if (result == -2) outFile << Timestamp() << "skipped: loadout object not ready" << std::endl;
 
         // Reload the settings if the ini file was saved
         if (++loops >= 100) {
