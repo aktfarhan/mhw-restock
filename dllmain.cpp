@@ -9,72 +9,81 @@
 #include <string>
 #include <cstdio>
 
-const uintptr_t JOB_RUNNER = 0x1AD9D20; // Runs every frame on the main thread
-const uintptr_t APPLY_LOADOUT = 0x1D38110; // Call ApplyLoadout(obj, loadoutPos, flag)
+const uintptr_t JOB_RUNNER = 0x1AD9D20;        // Runs every frame on the main thread
+const uintptr_t APPLY_LOADOUT = 0x1D38110;     // Call ApplyLoadout(obj, loadoutPos, flag)
 const uintptr_t LOADOUT_OBJ_BASE = 0x051C4640; // Start of the ApplyLoadout object's pointer
 
 // Settings from mhw_restock.ini
-char iniPath[MAX_PATH] = {}; // Full path to mhw_restock.ini
-char keyName[32] = "P"; // The key's name as written in the file
-int restockKey = 'P'; // The key's Windows code
-std::atomic<int> loadoutSlot{6}; // Which loadout to apply
+char iniPath[MAX_PATH] = {};     // Full path to mhw_restock.ini
+char keyName[32] = "F5";         // The key's name as written in the file
+int restockKey = VK_F5;          // The key's Windows code
+std::atomic<int> loadoutSlot{0}; // Which loadout to apply
 
 // Returns the zone ID (e.g. 306 = Seliana Gathering Hub)
-int ReadZoneId() {
+int ReadZoneId()
+{
     // Where MHW starts in memory
-    uintptr_t base = (uintptr_t) GetModuleHandle(nullptr);
+    uintptr_t base = (uintptr_t)GetModuleHandle(nullptr);
 
     // Read the fixed pointer inside the exe
-    uintptr_t addr = *(uintptr_t*) (base + 0x051C4368);
+    uintptr_t addr = *(uintptr_t *)(base + 0x051C4368);
 
     // The middle steps of the path
-    const uintptr_t offsets[] = { 0x80, 0x50, 0xD0, 0x8, 0x508 };
+    const uintptr_t offsets[] = {0x80, 0x50, 0xD0, 0x8, 0x508};
 
     // Part of the chain doesn't exist yet
-    for (uintptr_t off : offsets) {
-        if (addr == 0) return -1;
+    for (uintptr_t off : offsets)
+    {
+        if (addr == 0)
+            return -1;
 
         // Add the offset, read the next pointer
-        addr = *(uintptr_t*) (addr + off);
+        addr = *(uintptr_t *)(addr + off);
     }
 
-    if (addr == 0) return -1;
+    if (addr == 0)
+        return -1;
 
     // Read the zone ID and return it
-    return *(int*) (addr + 0xB88);
+    return *(int *)(addr + 0xB88);
 }
 
 // Returns the object ApplyLoadout needs, or 0 if the chain isn't ready
-uintptr_t ReadLoadoutObj() {
-    uintptr_t base = (uintptr_t) GetModuleHandle(nullptr);
-    uintptr_t addr = *(uintptr_t*) (base + LOADOUT_OBJ_BASE);
-    const uintptr_t offsets[] = { 0x150, 0x10, 0x140, 0x170, 0x2C0, 0x438 };
+uintptr_t ReadLoadoutObj()
+{
+    uintptr_t base = (uintptr_t)GetModuleHandle(nullptr);
+    uintptr_t addr = *(uintptr_t *)(base + LOADOUT_OBJ_BASE);
+    const uintptr_t offsets[] = {0x150, 0x10, 0x140, 0x170, 0x2C0, 0x438};
 
     // Follow each step of the path
-    for (uintptr_t offset : offsets) {
-        if (addr == 0) return 0;
-        
+    for (uintptr_t offset : offsets)
+    {
+        if (addr == 0)
+            return 0;
+
         // Add the offset, read the next pointer
-        addr = *(uintptr_t*) (addr + offset);
+        addr = *(uintptr_t *)(addr + offset);
     }
     return addr;
 }
 
 // Astera, Astera Gathering Hub, Research Base, Seliana, Seliana Gathering Hub
-bool IsBase(int zone) {
+bool IsBase(int zone)
+{
     return zone == 301 || zone == 302 || zone == 303 || zone == 305 || zone == 306;
 }
 
 // Returns true if tabbed into the game
-bool IsGameFocused() {
+bool IsGameFocused()
+{
     DWORD pid = 0;
     GetWindowThreadProcessId(GetForegroundWindow(), &pid);
     return pid == GetCurrentProcessId();
 }
 
 // The shape of the two game functions
-using ApplyLoadoutFn = void (*)(void* obj, int loadoutPos, int flag);
-using JobRunnerFn = uintptr_t (*)(void* a, void* b, void* c, void* d);
+using ApplyLoadoutFn = void (*)(void *obj, int loadoutPos, int flag);
+using JobRunnerFn = uintptr_t (*)(void *a, void *b, void *c, void *d);
 
 JobRunnerFn originalJobRunner = nullptr;
 std::atomic<bool> restockRequested{false};
@@ -82,25 +91,32 @@ std::atomic<int> restockResult{0};
 std::atomic<int> restockZone{0};
 
 // The replacement for the game's job runner, called on every frame
-uintptr_t HookedJobRunner(void* a, void* b, void* c, void* d) {
+uintptr_t HookedJobRunner(void *a, void *b, void *c, void *d)
+{
     // Let the game do its normal jobs first
     uintptr_t result = originalJobRunner(a, b, c, d);
 
     // Check if P was pressed
-    if (restockRequested.exchange(false)) {
+    if (restockRequested.exchange(false))
+    {
         int zone = ReadZoneId();
         uintptr_t obj = ReadLoadoutObj();
         restockZone = zone;
 
         // Do the proper action
-        if (!IsBase(zone)) {
+        if (!IsBase(zone))
+        {
             restockResult = -1;
-        } else if (obj == 0) {
+        }
+        else if (obj == 0)
+        {
             restockResult = -2;
-        } else {
-            uintptr_t base = (uintptr_t) GetModuleHandle(nullptr);
-            ApplyLoadoutFn applyLoadout = (ApplyLoadoutFn) (base + APPLY_LOADOUT);
-            applyLoadout((void*) obj, loadoutSlot, 0);
+        }
+        else
+        {
+            uintptr_t base = (uintptr_t)GetModuleHandle(nullptr);
+            ApplyLoadoutFn applyLoadout = (ApplyLoadoutFn)(base + APPLY_LOADOUT);
+            applyLoadout((void *)obj, loadoutSlot, 0);
             restockResult = 1;
         }
     }
@@ -108,56 +124,62 @@ uintptr_t HookedJobRunner(void* a, void* b, void* c, void* d) {
 }
 
 // Writes the 14-byte jump to 'dest' at 'at'
-void WriteAbsJump(uint8_t* at, uintptr_t dest) {
+void WriteAbsJump(uint8_t *at, uintptr_t dest)
+{
     at[0] = 0xFF;
     at[1] = 0x25;
-    *(uint32_t*) (at + 2) = 0;
-    
+    *(uint32_t *)(at + 2) = 0;
+
     // The 8-byte address to jump to
-    *(uintptr_t*) (at + 6) = dest;
+    *(uintptr_t *)(at + 6) = dest;
 }
 
 // Hooks the job runner
-bool InstallHook() {
-    uint8_t* target = (uint8_t*) ((uintptr_t) GetModuleHandle(nullptr) + JOB_RUNNER);
-    
+bool InstallHook()
+{
+    uint8_t *target = (uint8_t *)((uintptr_t)GetModuleHandle(nullptr) + JOB_RUNNER);
+
     // The 16-byte swap needs a 16-byte aligned address
-    if ((uintptr_t) target % 16 != 0) return false;
+    if ((uintptr_t)target % 16 != 0)
+        return false;
 
     // The 14 bytes that are replaced
-    const uint8_t expected[14] = { 0x40, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x89, 0x6C, 0x24, 0x50, 0x48, 0x8B, 0xD9 };
-    if (memcmp(target, expected, sizeof(expected)) != 0) return false;
+    const uint8_t expected[14] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x89, 0x6C, 0x24, 0x50, 0x48, 0x8B, 0xD9};
+    if (memcmp(target, expected, sizeof(expected)) != 0)
+        return false;
 
     // Check ApplyLoadout's first 32 bytes
-    const uint8_t* apply = (const uint8_t*) ((uintptr_t) GetModuleHandle(nullptr) + APPLY_LOADOUT);
-    const uint8_t applyExpected[32] = {
-        0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x48, 0x89, 0x7C, 0x24, 0x18, 0x55,
-        0x41, 0x56, 0x41, 0x57, 0x48, 0x8D, 0xAC, 0x24, 0x10, 0xFE, 0xFF, 0xFF, 0x48, 0x81, 0xEC, 0xF0
-    };
-    if (memcmp(apply, applyExpected, sizeof(applyExpected)) != 0) return false;
+    const uint8_t *apply = (const uint8_t *)((uintptr_t)GetModuleHandle(nullptr) + APPLY_LOADOUT);
+    const uint8_t applyExpected[32] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x48,
+                                       0x89, 0x7C, 0x24, 0x18, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8D,
+                                       0xAC, 0x24, 0x10, 0xFE, 0xFF, 0xFF, 0x48, 0x81, 0xEC, 0xF0};
+    if (memcmp(apply, applyExpected, sizeof(applyExpected)) != 0)
+        return false;
 
     // Save a copy of the game's first 14 bytes
-    uint8_t* tramp = (uint8_t*) VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-    if (!tramp) return false;
+    uint8_t *tramp = (uint8_t *)VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!tramp)
+        return false;
     memcpy(tramp, target, 14);
-    WriteAbsJump(tramp + 14, (uintptr_t) (target + 14));
-    originalJobRunner = (JobRunnerFn) tramp;
+    WriteAbsJump(tramp + 14, (uintptr_t)(target + 14));
+    originalJobRunner = (JobRunnerFn)tramp;
 
     // Build the new first 16 bytes
     alignas(16) uint8_t patch[16];
-    WriteAbsJump(patch, (uintptr_t) &HookedJobRunner);
+    WriteAbsJump(patch, (uintptr_t)&HookedJobRunner);
     patch[14] = target[14];
     patch[15] = target[15];
 
     // Change game code from read-only to write mode
     DWORD oldProtect;
-    if (!VirtualProtect(target, 16, PAGE_EXECUTE_READWRITE, &oldProtect)) return false;
+    if (!VirtualProtect(target, 16, PAGE_EXECUTE_READWRITE, &oldProtect))
+        return false;
 
     // Swap in the new bytes all at once
     unsigned __int128 oldBytes, newBytes;
     memcpy(&oldBytes, target, 16);
     memcpy(&newBytes, patch, 16);
-    bool swapped = __sync_bool_compare_and_swap((unsigned __int128*) target, oldBytes, newBytes);
+    bool swapped = __sync_bool_compare_and_swap((unsigned __int128 *)target, oldBytes, newBytes);
 
     // Make it read-only again, and tell the CPU the code changed
     VirtualProtect(target, 16, oldProtect, &oldProtect);
@@ -166,20 +188,25 @@ bool InstallHook() {
 }
 
 // Turns a key name into Windows key code, or 0 if unknown
-int KeyFromName(const char* name) {
+int KeyFromName(const char *name)
+{
     size_t len = strlen(name);
 
     // A single letter or digit
-    if (len == 1 && isalnum((unsigned char) name[0])) return toupper((unsigned char) name[0]);
+    if (len == 1 && isalnum((unsigned char)name[0]))
+        return toupper((unsigned char)name[0]);
 
     // F1 - F12
-    if (len >= 2 && len <= 3 && toupper((unsigned char) name[0]) == 'F') {
+    if (len >= 2 && len <= 3 && toupper((unsigned char)name[0]) == 'F')
+    {
         int n = atoi(name + 1);
-        if (n >= 1 && n <= 12) return VK_F1 + (n - 1);
+        if (n >= 1 && n <= 12)
+            return VK_F1 + (n - 1);
     }
 
     // NUMPAD0 - NUMPAD9
-    if (len == 7 && _strnicmp(name, "NUMPAD", 6) == 0 && isdigit((unsigned char) name[6])) {
+    if (len == 7 && _strnicmp(name, "NUMPAD", 6) == 0 && isdigit((unsigned char)name[6]))
+    {
         return VK_NUMPAD0 + (name[6] - '0');
     }
 
@@ -187,25 +214,31 @@ int KeyFromName(const char* name) {
 }
 
 // Returns the current date and time
-std::string Timestamp() {
+std::string Timestamp()
+{
     SYSTEMTIME t;
     GetLocalTime(&t);
     char text[32];
-    snprintf(text, sizeof(text), "[%04d-%02d-%02d %02d:%02d:%02d] ", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
+    snprintf(text, sizeof(text), "[%04d-%02d-%02d %02d:%02d:%02d] ", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute,
+             t.wSecond);
     return text;
 }
 
 // Returns when the ini file was last saved, or 0 if it doesn't exist
-ULONGLONG IniLastWrite() {
+ULONGLONG IniLastWrite()
+{
     WIN32_FILE_ATTRIBUTE_DATA info;
-    if (!GetFileAttributesExA(iniPath, GetFileExInfoStandard, &info)) return 0;
-    return ((ULONGLONG) info.ftLastWriteTime.dwHighDateTime << 32) | info.ftLastWriteTime.dwLowDateTime;
+    if (!GetFileAttributesExA(iniPath, GetFileExInfoStandard, &info))
+        return 0;
+    return ((ULONGLONG)info.ftLastWriteTime.dwHighDateTime << 32) | info.ftLastWriteTime.dwLowDateTime;
 }
 
 // Reads the ini file into the settings
-void LoadSettings(std::ofstream& log) {
+void LoadSettings(std::ofstream &log)
+{
     // If the file doesn't exist, create it with the defaults
-    if (IniLastWrite() == 0) {
+    if (IniLastWrite() == 0)
+    {
         std::string loadoutText = std::to_string(loadoutSlot + 1);
         WritePrivateProfileStringA("Settings", "Key", keyName, iniPath);
         WritePrivateProfileStringA("Settings", "Loadout", loadoutText.c_str(), iniPath);
@@ -219,41 +252,50 @@ void LoadSettings(std::ofstream& log) {
 
     // Only accept valid keys
     int newKey = KeyFromName(newKeyName);
-    if (newKey == 0) {
+    if (newKey == 0)
+    {
         log << Timestamp() << "settings: unknown key '" << newKeyName << "', keeping " << keyName << std::endl;
-    } else if (newKey != restockKey) {
+    }
+    else if (newKey != restockKey)
+    {
         restockKey = newKey;
         strcpy(keyName, newKeyName);
         log << Timestamp() << "settings: Key = " << keyName << std::endl;
     }
 
     // Loadout: the game has 80 slots
-    if (newLoadout < 1 || newLoadout > 80) {
+    if (newLoadout < 1 || newLoadout > 80)
+    {
         log << Timestamp() << "settings: Loadout must be 1-80, keeping " << loadoutSlot + 1 << std::endl;
-    } else if (newLoadout - 1 != loadoutSlot) {
+    }
+    else if (newLoadout - 1 != loadoutSlot)
+    {
         loadoutSlot = newLoadout - 1;
         log << Timestamp() << "settings: Loadout = " << newLoadout << std::endl;
     }
 }
 
-
 // Runs on its own thread as long as the game is open.
-DWORD WINAPI RestockThread(_In_ LPVOID LpParameter) {
+DWORD WINAPI RestockThread(_In_ LPVOID LpParameter)
+{
     // Get the dll file path
     char logPath[MAX_PATH];
-    GetModuleFileNameA((HMODULE) LpParameter, logPath, MAX_PATH);
+    GetModuleFileNameA((HMODULE)LpParameter, logPath, MAX_PATH);
 
     // Make the log and ini paths from it
     strcpy(iniPath, logPath);
-    char* logDot = strrchr(logPath, '.');
-    char* iniDot = strrchr(iniPath, '.');
-    if (logDot) strcpy(logDot, ".log");
-    if (iniDot) strcpy(iniDot, ".ini");
+    char *logDot = strrchr(logPath, '.');
+    char *iniDot = strrchr(iniPath, '.');
+    if (logDot)
+        strcpy(logDot, ".log");
+    if (iniDot)
+        strcpy(iniDot, ".ini");
 
     // Append: add lines, don't overwrite
     std::ofstream outFile(logPath, std::ios::app);
 
-    if (!outFile.is_open()) {
+    if (!outFile.is_open())
+    {
         std::cerr << "Error opening file." << std::endl;
         return 1;
     }
@@ -265,14 +307,17 @@ DWORD WINAPI RestockThread(_In_ LPVOID LpParameter) {
 
     // Install the hook, and try for 60s if it fails
     bool hooked = false;
-    for (int i = 0; i < 60 && !hooked; i++) {
+    for (int i = 0; i < 60 && !hooked; i++)
+    {
         hooked = InstallHook();
-        if (!hooked) Sleep(1000);
+        if (!hooked)
+            Sleep(1000);
     }
 
     // Log if it worked, and stop if it didn't
     outFile << Timestamp() << (hooked ? "hook installed" : "hook FAILED, restock disabled") << std::endl;
-    if (!hooked) return 1;
+    if (!hooked)
+        return 1;
 
     // Remembers the key state from the previous loop
     bool wasDown = false;
@@ -280,11 +325,13 @@ DWORD WINAPI RestockThread(_In_ LPVOID LpParameter) {
     // Loop to check the ini file once a second
     int loops = 0;
 
-    while (true) {
+    while (true)
+    {
         bool downNow = (GetAsyncKeyState(restockKey) & 0x8000) != 0;
-        
+
         // Only run when the key is pressed
-        if (downNow && !wasDown && IsGameFocused()) {
+        if (downNow && !wasDown && IsGameFocused())
+        {
             restockRequested = true;
             outFile << Timestamp() << keyName << " pressed" << std::endl;
         }
@@ -293,15 +340,20 @@ DWORD WINAPI RestockThread(_In_ LPVOID LpParameter) {
 
         // Log what the hook did
         int result = restockResult.exchange(0);
-        if (result == 1) outFile << Timestamp() << "restocked (zone " << restockZone << ")" << std::endl;
-        if (result == -1) outFile << Timestamp() << "skipped: not in a base (zone " << restockZone << ")" << std::endl;
-        if (result == -2) outFile << Timestamp() << "skipped: loadout object not ready" << std::endl;
+        if (result == 1)
+            outFile << Timestamp() << "restocked (zone " << restockZone << ")" << std::endl;
+        if (result == -1)
+            outFile << Timestamp() << "skipped: not in a base (zone " << restockZone << ")" << std::endl;
+        if (result == -2)
+            outFile << Timestamp() << "skipped: loadout object not ready" << std::endl;
 
         // Reload the settings if the ini file was saved
-        if (++loops >= 100) {
+        if (++loops >= 100)
+        {
             loops = 0;
             ULONGLONG write = IniLastWrite();
-            if (write != lastWrite) {
+            if (write != lastWrite)
+            {
                 lastWrite = write;
                 LoadSettings(outFile);
                 lastWrite = IniLastWrite();
@@ -314,15 +366,16 @@ DWORD WINAPI RestockThread(_In_ LPVOID LpParameter) {
     return 0;
 }
 
-BOOL WINAPI DllMain(
-    HINSTANCE hinstDLL,  // handle to DLL module
-    DWORD fdwReason,     // reason for calling function
-    LPVOID lpvReserved ) // reserved
+BOOL WINAPI DllMain(HINSTANCE hinstDLL, // handle to DLL module
+                    DWORD fdwReason,    // reason for calling function
+                    LPVOID lpvReserved) // reserved
 {
     // Perform actions based on the reason for calling.
-    if (fdwReason == DLL_PROCESS_ATTACH) {
+    if (fdwReason == DLL_PROCESS_ATTACH)
+    {
         HANDLE hThread = CreateThread(nullptr, 0, RestockThread, hinstDLL, 0, nullptr);
-        if (hThread) CloseHandle(hThread);
+        if (hThread)
+            CloseHandle(hThread);
     }
-    return TRUE;  // Successful DLL_PROCESS_ATTACH.
+    return TRUE; // Successful DLL_PROCESS_ATTACH.
 }
